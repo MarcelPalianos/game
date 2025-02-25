@@ -26,7 +26,7 @@ fun Match3App() {
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             Column {
-                Text("Game is starting...", color = Color.Black) // Debug message
+                Text("Game is starting now...", color = Color.Black) // Debug message
                 Match3Game()
             }
         }

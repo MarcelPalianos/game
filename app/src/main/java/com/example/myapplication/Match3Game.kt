@@ -1,19 +1,20 @@
 package com.example.myapplication
+
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @Composable
 fun Match3Game() {
@@ -21,14 +22,16 @@ fun Match3Game() {
     var grid by remember { mutableStateOf(generateGrid(gridSize)) }
     var selectedTile by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
-    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
-        for (row in 0 until gridSize) {
-            Row {
-                for (col in 0 until gridSize) {
-                    val tile = grid[row][col]
-                    TileView(tile, row, col) { from, to ->
-                        grid = swapTiles(grid, from, to)
-                        selectedTile = null
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column {
+            for (row in 0 until gridSize) {
+                Row {
+                    for (col in 0 until gridSize) {
+                        val tile = grid[row][col]
+                        TileView(tile, row, col) { from, to ->
+                            grid = swapTiles(grid, from, to)
+                            selectedTile = null
+                        }
                     }
                 }
             }
@@ -42,16 +45,22 @@ fun TileView(tile: Tile, row: Int, col: Int, onSwap: (Pair<Int, Int>, Pair<Int, 
     var offsetY by remember { mutableStateOf(0f) }
     val animatedX by animateFloatAsState(targetValue = offsetX, label = "X Animation")
     val animatedY by animateFloatAsState(targetValue = offsetY, label = "Y Animation")
+    var dragging by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
             .size(60.dp)
             .padding(2.dp)
-            .offset(x = animatedX.dp, y = animatedY.dp) // Moves the tile correctly
+            .offset { IntOffset(animatedX.roundToInt(), animatedY.roundToInt()) }
             .background(tile.color)
+            .zIndex(if (dragging) 1f else 0f) // Ensure the dragging tile is on top
             .pointerInput(Unit) {
                 detectDragGestures(
+                    onDragStart = {
+                        dragging = true
+                    },
                     onDragEnd = {
+                        dragging = false
                         val direction = getSwipeDirection(offsetX, offsetY)
                         val targetPos = getNewPosition(row, col, direction)
                         targetPos?.let { onSwap(Pair(row, col), it) }
@@ -59,14 +68,13 @@ fun TileView(tile: Tile, row: Int, col: Int, onSwap: (Pair<Int, Int>, Pair<Int, 
                         offsetY = 0f
                     },
                     onDrag = { _, dragAmount ->
-                        offsetX += dragAmount.x / density
-                        offsetY += dragAmount.y / density
+                        offsetX += dragAmount.x
+                        offsetY += dragAmount.y
                     }
                 )
             }
     )
 }
-
 
 data class Tile(val color: Color)
 
