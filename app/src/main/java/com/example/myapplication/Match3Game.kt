@@ -11,8 +11,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+sealed class GameState {
+    object WaitingForMove : GameState()
+    object Flashing : GameState()
+    object RemovingMatches : GameState()
+    object FallingTiles : GameState()
+    object CheckingNewMatches : GameState()
+}
 
 @Composable
 fun Match3Game() {
@@ -24,6 +33,7 @@ fun Match3Game() {
     val paddingPx = with(density) { paddingDp.toPx() }
     val totalTileSize = tileSizePx + paddingPx
 
+    var gameState by remember { mutableStateOf<GameState>(GameState.WaitingForMove) }
     var grid by remember { mutableStateOf(generateRandomGrid(gridSize)) }
     var draggedTile by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
@@ -32,35 +42,37 @@ fun Match3Game() {
         modifier = Modifier
             .fillMaxSize()
             .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        val col = ((offset.x - (size.width - gridSize * totalTileSize) / 2) / totalTileSize).toInt()
-                        val row = ((offset.y - (size.height - gridSize * totalTileSize) / 2) / totalTileSize).toInt()
-                        if (row in 0 until gridSize && col in 0 until gridSize) {
-                            draggedTile = Pair(row, col)
-                            dragOffset = Offset.Zero
-                        }
-                    },
-                    onDragEnd = {
-                        draggedTile?.let { (row, col) ->
-                            val direction = getSwipeDirection(dragOffset.x, dragOffset.y)
-                            val targetPos = getNewPosition(row, col, direction)
-
-                            if (targetPos != null && isValidSwap(grid, row, col, targetPos)) {
-                                grid = swapTiles(grid, Pair(row, col), targetPos)
+                if(gameState is GameState.WaitingForMove){
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            val col = ((offset.x - (size.width - gridSize * totalTileSize) / 2) / totalTileSize).toInt()
+                            val row = ((offset.y - (size.height - gridSize * totalTileSize) / 2) / totalTileSize).toInt()
+                            if (row in 0 until gridSize && col in 0 until gridSize) {
+                                draggedTile = Pair(row, col)
+                                dragOffset = Offset.Zero
                             }
-                        }
-                        draggedTile = null
-                        dragOffset = Offset.Zero
-                    },
-                    onDrag = { _, dragAmount ->
-                        val maxDrag = totalTileSize
-                        val newOffsetX = (dragOffset.x + dragAmount.x).coerceIn(-maxDrag, maxDrag)
-                        val newOffsetY = (dragOffset.y + dragAmount.y).coerceIn(-maxDrag, maxDrag)
+                        },
+                        onDragEnd = {
+                            draggedTile?.let { (row, col) ->
+                                val direction = getSwipeDirection(dragOffset.x, dragOffset.y)
+                                val targetPos = getNewPosition(row, col, direction)
 
-                        dragOffset = Offset(newOffsetX, newOffsetY)
-                    }
-                )
+                                if (targetPos != null && isValidSwap(grid, row, col, targetPos)) {
+                                    grid = swapTiles(grid, Pair(row, col), targetPos)
+                                    gameState = GameState.Flashing
+                                }
+                            }
+                            draggedTile = null
+                            dragOffset = Offset.Zero
+                        },
+                        onDrag = { _, dragAmount ->
+                            val maxDrag = totalTileSize
+                            val newOffsetX = (dragOffset.x + dragAmount.x).coerceIn(-maxDrag, maxDrag)
+                            val newOffsetY = (dragOffset.y + dragAmount.y).coerceIn(-maxDrag, maxDrag)
+                            dragOffset = Offset(newOffsetX, newOffsetY)
+                        }
+                    )
+                }
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -94,7 +106,78 @@ fun Match3Game() {
             }
         }
     }
+
+    // 🚀 Run game logic in a coroutine when gameState changes
+    LaunchedEffect(gameState) {
+        processGameLogic(
+            currentGrid = grid,
+            currentGameState = gameState,
+            updateGameState = { newGameState -> gameState = newGameState },
+            updateGrid = { newGrid -> grid = newGrid },
+            updateFlashingTiles = { flashingTiles ->
+                // Handle flashing tiles if needed
+            }
+        )
+    }
 }
+suspend fun processGameLogic(
+    currentGrid: Grid,
+    currentGameState: GameState,
+    updateGameState: (GameState) -> Unit,
+    updateGrid: (Grid) -> Unit,
+    updateFlashingTiles: (Set<Pair<Int, Int>>) -> Unit
+) {
+    var grid = currentGrid
+    var gameState = currentGameState
+
+    while (true) {
+        delay(200) // Short delay for animations
+
+        when (gameState) {
+            is GameState.Flashing -> {
+                val matches = findMatches(grid)
+                if (matches.isNotEmpty()) {
+                    for (i in 1..3) {
+                        updateFlashingTiles(matches.toSet()) // Show tiles as flashing
+                        delay(300)
+                        updateFlashingTiles(emptySet()) // Hide flashing effect
+                        delay(300)
+                    }
+                }
+                gameState = GameState.RemovingMatches
+            }
+            is GameState.RemovingMatches -> {
+                grid = removeMatches(grid)
+                gameState = GameState.FallingTiles
+            }
+            is GameState.FallingTiles -> {
+                grid = applyGravity(grid)
+                gameState = GameState.CheckingNewMatches
+            }
+            is GameState.CheckingNewMatches -> {
+                val newMatches = findMatches(grid)
+                gameState = if (newMatches.isNotEmpty()) GameState.Flashing else GameState.WaitingForMove
+            }
+            else -> return // Exit loop if no action needed
+        }
+
+        // 🔄 Apply updates to UI state
+        updateGameState(gameState)
+        updateGrid(grid)
+    }
+}
+
+
+fun applyGravity(grid: Any): Grid {
+
+    return TODO("Provide the return value")
+}
+
+fun removeMatches(grid: Any): Grid {
+    return TODO("Provide the return value")
+
+}
+
 
 /** ✅ Only swap if it creates a match */
 fun isValidSwap(grid: Grid, row: Int, col: Int, target: Pair<Int, Int>): Boolean {
