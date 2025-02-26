@@ -1,6 +1,7 @@
 package com.example.myapplication
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
@@ -8,8 +9,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
@@ -18,65 +21,87 @@ import kotlin.math.roundToInt
 
 @Composable
 fun Match3Game() {
-    val gridSize = 5 // 5x5 grid
-    var grid by remember { mutableStateOf(generateGrid(gridSize)) }
-    var selectedTile by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    val gridSize = 5
+    val tileSizeDp = 60.dp
+    val paddingDp = 4.dp // 🔹 Add padding between tiles
+    val density = LocalDensity.current
+    val tileSizePx = with(density) { tileSizeDp.toPx() }
+    val paddingPx = with(density) { paddingDp.toPx() }
+    val totalTileSize = tileSizePx + paddingPx // 🔹 Tiles + padding
 
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column {
-            for (row in 0 until gridSize) {
-                Row {
-                    for (col in 0 until gridSize) {
-                        val tile = grid[row][col]
-                        TileView(tile, row, col) { from, to ->
-                            grid = swapTiles(grid, from, to)
-                            selectedTile = null
+    var grid by remember { mutableStateOf(generateGrid(gridSize)) }
+    var draggedTile by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        val col = ((offset.x - (size.width - gridSize * totalTileSize) / 2) / totalTileSize).toInt()
+                        val row = ((offset.y - (size.height - gridSize * totalTileSize) / 2) / totalTileSize).toInt()
+                        if (row in 0 until gridSize && col in 0 until gridSize) {
+                            draggedTile = Pair(row, col)
+                            dragOffset = Offset.Zero
                         }
+                    },
+                    onDragEnd = {
+                        draggedTile?.let { (row, col) ->
+                            val direction = getSwipeDirection(dragOffset.x, dragOffset.y)
+                            val targetPos = getNewPosition(row, col, direction)
+                            if (targetPos != null) {
+                                grid = swapTiles(grid, Pair(row, col), targetPos)
+                            }
+                        }
+                        draggedTile = null
+                        dragOffset = Offset.Zero
+                    },
+                    onDrag = { _, dragAmount ->
+                        // 🔹 Restrict dragging within one tile
+                        val maxDrag = totalTileSize
+                        val newOffsetX = (dragOffset.x + dragAmount.x).coerceIn(-maxDrag, maxDrag)
+                        val newOffsetY = (dragOffset.y + dragAmount.y).coerceIn(-maxDrag, maxDrag)
+
+                        dragOffset = Offset(newOffsetX, newOffsetY)
+                    }
+                )
+            }
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val startX = (size.width - gridSize * totalTileSize) / 2
+            val startY = (size.height - gridSize * totalTileSize) / 2
+
+            // Draw static tiles
+            for (row in 0 until gridSize) {
+                for (col in 0 until gridSize) {
+                    if (draggedTile != Pair(row, col)) {
+                        drawRect(
+                            color = grid[row][col].color,
+                            topLeft = Offset(
+                                startX + col * totalTileSize,
+                                startY + row * totalTileSize
+                            ),
+                            size = androidx.compose.ui.geometry.Size(tileSizePx, tileSizePx)
+                        )
                     }
                 }
+            }
+
+            // Draw dragged tile on top
+            draggedTile?.let { (row, col) ->
+                drawRect(
+                    color = grid[row][col].color,
+                    topLeft = Offset(
+                        startX + col * totalTileSize + dragOffset.x,
+                        startY + row * totalTileSize + dragOffset.y
+                    ),
+                    size = androidx.compose.ui.geometry.Size(tileSizePx, tileSizePx)
+                )
             }
         }
     }
 }
-
-@Composable
-fun TileView(tile: Tile, row: Int, col: Int, onSwap: (Pair<Int, Int>, Pair<Int, Int>) -> Unit) {
-    var offsetX by remember { mutableStateOf(0f) }
-    var offsetY by remember { mutableStateOf(0f) }
-    val animatedX by animateFloatAsState(targetValue = offsetX, label = "X Animation")
-    val animatedY by animateFloatAsState(targetValue = offsetY, label = "Y Animation")
-    var dragging by remember { mutableStateOf(false) }
-
-    Box(
-        modifier = Modifier
-            .size(60.dp)
-            .padding(2.dp)
-            .offset { IntOffset(animatedX.roundToInt(), animatedY.roundToInt()) }
-            .background(tile.color)
-            .zIndex(if (dragging) 1f else 0f) // Ensure the dragging tile is on top
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = {
-                        dragging = true
-                    },
-                    onDragEnd = {
-                        dragging = false
-                        val direction = getSwipeDirection(offsetX, offsetY)
-                        val targetPos = getNewPosition(row, col, direction)
-                        targetPos?.let { onSwap(Pair(row, col), it) }
-                        offsetX = 0f
-                        offsetY = 0f
-                    },
-                    onDrag = { _, dragAmount ->
-                        // ✅ Restrict dragging within 60dp range
-                        offsetX = (offsetX + dragAmount.x).coerceIn(-180f, 180f)
-                        offsetY = (offsetY + dragAmount.y).coerceIn(-180f, 180f)
-                    }
-                )
-            }
-    )
-}
-
 
 data class Tile(val color: Color)
 
