@@ -68,13 +68,15 @@ fun TileView(tile: Tile, row: Int, col: Int, onSwap: (Pair<Int, Int>, Pair<Int, 
                         offsetY = 0f
                     },
                     onDrag = { _, dragAmount ->
-                        offsetX += dragAmount.x
-                        offsetY += dragAmount.y
+                        // ✅ Restrict dragging within 60dp range
+                        offsetX = (offsetX + dragAmount.x).coerceIn(-180f, 180f)
+                        offsetY = (offsetY + dragAmount.y).coerceIn(-180f, 180f)
                     }
                 )
             }
     )
 }
+
 
 data class Tile(val color: Color)
 
