@@ -15,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+
 sealed class GameState {
     object WaitingForMove : GameState()
     object Flashing : GameState()
@@ -37,12 +38,13 @@ fun Match3Game() {
     var grid by remember { mutableStateOf(generateRandomGrid(gridSize)) }
     var draggedTile by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var flashingTiles by remember { mutableStateOf<Set<Pair<Int, Int>>>(emptySet()) } // ⚡ Holds flashing tiles
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .pointerInput(Unit) {
-                if(gameState is GameState.WaitingForMove){
+                if (gameState is GameState.WaitingForMove) {
                     detectDragGestures(
                         onDragStart = { offset ->
                             val col = ((offset.x - (size.width - gridSize * totalTileSize) / 2) / totalTileSize).toInt()
@@ -81,45 +83,33 @@ fun Match3Game() {
 
             for (row in 0 until gridSize) {
                 for (col in 0 until gridSize) {
+                    val isFlashing = flashingTiles.contains(Pair(row, col))
+                    val tileColor = if (isFlashing) Color.White else grid[row][col].color
+
                     if (draggedTile != Pair(row, col)) {
                         drawRect(
-                            color = grid[row][col].color,
-                            topLeft = Offset(
-                                startX + col * totalTileSize,
-                                startY + row * totalTileSize
-                            ),
+                            color = tileColor,
+                            topLeft = Offset(startX + col * totalTileSize, startY + row * totalTileSize),
                             size = androidx.compose.ui.geometry.Size(tileSizePx, tileSizePx)
                         )
                     }
                 }
             }
-
-            draggedTile?.let { (row, col) ->
-                drawRect(
-                    color = grid[row][col].color,
-                    topLeft = Offset(
-                        startX + col * totalTileSize + dragOffset.x,
-                        startY + row * totalTileSize + dragOffset.y
-                    ),
-                    size = androidx.compose.ui.geometry.Size(tileSizePx, tileSizePx)
-                )
-            }
         }
     }
 
-    // 🚀 Run game logic in a coroutine when gameState changes
+    // 🚀 Run game logic when gameState changes
     LaunchedEffect(gameState) {
         processGameLogic(
             currentGrid = grid,
             currentGameState = gameState,
             updateGameState = { newGameState -> gameState = newGameState },
             updateGrid = { newGrid -> grid = newGrid },
-            updateFlashingTiles = { flashingTiles ->
-                // Handle flashing tiles if needed
-            }
+            updateFlashingTiles = { flashingTiles = it } // ✅ Update flashing tiles
         )
     }
 }
+
 suspend fun processGameLogic(
     currentGrid: Grid,
     currentGameState: GameState,
@@ -167,15 +157,39 @@ suspend fun processGameLogic(
     }
 }
 
+/** ✅ Implements gravity so tiles fall into empty spaces */
+fun applyGravity(grid: Grid): Grid {
+    val newGrid = grid.map { it.toMutableList() }
 
-fun applyGravity(grid: Any): Grid {
+    for (col in newGrid[0].indices) {
+        var emptySpaces = 0
+        for (row in newGrid.indices.reversed()) {
+            if (newGrid[row][col].color == Color.Transparent) {
+                emptySpaces++
+            } else if (emptySpaces > 0) {
+                newGrid[row + emptySpaces][col] = newGrid[row][col]
+                newGrid[row][col] = Tile(Color.Transparent)
+            }
+        }
+    }
 
-    return TODO("Provide the return value")
+    for (col in newGrid[0].indices) {
+        for (row in 0 until newGrid.size) {
+            if (newGrid[row][col].color == Color.Transparent) {
+                newGrid[row][col] = Tile(generateRandomColor())
+            }
+        }
+    }
+
+    return newGrid
 }
 
-fun removeMatches(grid: Any): Grid {
-    return TODO("Provide the return value")
-
+/** ✅ Removes matched tiles */
+fun removeMatches(grid: Grid): Grid {
+    val newGrid = grid.map { it.toMutableList() }
+    val matches = findMatches(newGrid)
+    matches.forEach { (row, col) -> newGrid[row][col] = Tile(Color.Transparent) }
+    return newGrid
 }
 
 
@@ -319,4 +333,8 @@ fun getNewPosition(row: Int, col: Int, direction: String?): Pair<Int, Int>? {
         "UP" -> if (row > 0) Pair(row - 1, col) else null
         else -> null
     }
+}
+fun generateRandomColor(): Color {
+    val colors = listOf(Color.Red, Color.Green, Color.Blue, Color.Yellow, Color.Cyan, Color.Magenta)
+    return colors.random()
 }
