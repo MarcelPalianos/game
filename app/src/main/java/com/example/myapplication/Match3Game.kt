@@ -1,6 +1,5 @@
 package com.example.myapplication
 
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
@@ -13,8 +12,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlin.math.abs
-import kotlin.math.roundToInt
-
 
 sealed class GameState {
     object WaitingForMove : GameState()
@@ -94,6 +91,16 @@ fun Match3Game() {
                         )
                     }
                 }
+            }
+            draggedTile?.let { (row, col) ->
+                drawRect(
+                    color = grid[row][col].color,
+                    topLeft = Offset(
+                        startX + col * totalTileSize + dragOffset.x,
+                        startY + row * totalTileSize + dragOffset.y
+                    ),
+                    size = androidx.compose.ui.geometry.Size(tileSizePx, tileSizePx)
+                )
             }
         }
     }
@@ -191,8 +198,6 @@ fun removeMatches(grid: Grid): Grid {
     matches.forEach { (row, col) -> newGrid[row][col] = Tile(Color.Transparent) }
     return newGrid
 }
-
-
 /** ✅ Only swap if it creates a match */
 fun isValidSwap(grid: Grid, row: Int, col: Int, target: Pair<Int, Int>): Boolean {
     val tempGrid = swapTiles(grid.map { it.toMutableList() }, Pair(row, col), target)
