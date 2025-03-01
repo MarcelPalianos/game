@@ -19,6 +19,7 @@ sealed class GameState {
     object RemovingMatches : GameState()
     object FallingTiles : GameState()
     object CheckingNewMatches : GameState()
+    object Reshuffle : GameState()
 }
 
 @Composable
@@ -116,7 +117,6 @@ fun Match3Game() {
         )
     }
 }
-
 suspend fun processGameLogic(
     currentGrid: Grid,
     currentGameState: GameState,
@@ -135,9 +135,9 @@ suspend fun processGameLogic(
                 val matches = findMatches(grid)
                 if (matches.isNotEmpty()) {
                     for (i in 1..3) {
-                        updateFlashingTiles(matches.toSet()) // Show tiles as flashing
+                        updateFlashingTiles(matches.toSet()) // Show flashing
                         delay(300)
-                        updateFlashingTiles(emptySet()) // Hide flashing effect
+                        updateFlashingTiles(emptySet()) // Hide flashing
                         delay(300)
                     }
                 }
@@ -152,13 +152,23 @@ suspend fun processGameLogic(
                 gameState = GameState.CheckingNewMatches
             }
             is GameState.CheckingNewMatches -> {
-                val newMatches = findMatches(grid)
-                gameState = if (newMatches.isNotEmpty()) GameState.Flashing else GameState.WaitingForMove
+                // First check if there are any valid moves available.
+                if (!hasPossibleMoves(grid)) {
+                    gameState = GameState.Reshuffle
+                } else {
+                    val newMatches = findMatches(grid)
+                    gameState = if (newMatches.isNotEmpty()) GameState.Flashing else GameState.WaitingForMove
+                }
+            }
+            is GameState.Reshuffle -> {
+                // Reshuffle until a grid with valid moves is obtained.
+                grid = reshuffleGrid(grid)
+                gameState = GameState.CheckingNewMatches
             }
             else -> return // Exit loop if no action needed
         }
 
-        // 🔄 Apply updates to UI state
+        // Apply updates to UI state
         updateGameState(gameState)
         updateGrid(grid)
     }
@@ -286,32 +296,6 @@ fun createsMatch(grid: Grid, row: Int, col: Int): Boolean {
     return false
 }
 
-/** ✅ Ensures at least one valid move exists */
-fun hasPossibleMoves(grid: Grid): Boolean {
-    val size = grid.size
-
-    for (row in 0 until size) {
-        for (col in 0 until size) {
-            val tile = grid[row][col]
-
-            // Try swapping with right neighbor
-            if (col < size - 1) {
-                swapTiles(grid, Pair(row, col), Pair(row, col + 1))
-                if (findMatches(grid).isNotEmpty()) return true
-                swapTiles(grid, Pair(row, col), Pair(row, col + 1)) // Swap back
-            }
-
-            // Try swapping with bottom neighbor
-            if (row < size - 1) {
-                swapTiles(grid, Pair(row, col), Pair(row + 1, col))
-                if (findMatches(grid).isNotEmpty()) return true
-                swapTiles(grid, Pair(row, col), Pair(row + 1, col)) // Swap back
-            }
-        }
-    }
-    return false // No valid moves found
-}
-
 fun swapTiles(grid: Grid, from: Pair<Int, Int>, to: Pair<Int, Int>): Grid {
     val newGrid = grid.map { it.toMutableList() }
     val temp = newGrid[from.first][from.second]
@@ -343,3 +327,43 @@ fun generateRandomColor(): Color {
     val colors = listOf(Color.Red, Color.Green, Color.Blue, Color.Yellow, Color.Cyan, Color.Magenta)
     return colors.random()
 }
+fun hasPossibleMoves(grid: Grid): Boolean {
+    val size = grid.size
+
+    for (row in 0 until size) {
+        for (col in 0 until size) {
+            // Try swapping with right neighbor
+            if (col < size - 1) {
+                val swappedRight = swapTiles(grid, Pair(row, col), Pair(row, col + 1))
+                if (findMatches(swappedRight).isNotEmpty()) return true
+            }
+
+            // Try swapping with bottom neighbor
+            if (row < size - 1) {
+                val swappedDown = swapTiles(grid, Pair(row, col), Pair(row + 1, col))
+                if (findMatches(swappedDown).isNotEmpty()) return true
+            }
+        }
+    }
+    return false // No valid moves found
+}
+fun reshuffleGrid(grid: Grid): Grid {
+    val size = grid.size
+    // Flatten the grid into a mutable list of tiles
+    val allTiles = grid.flatten().toMutableList()
+    var newGrid: Grid
+    var attempts = 0
+    // Keep shuffling until a configuration with at least one possible move is found,
+    // or until a maximum number of attempts is reached.
+    do {
+        attempts++
+        allTiles.shuffle()
+        newGrid = List(size) { row ->
+            MutableList(size) { col ->
+                allTiles[row * size + col]
+            }
+        }
+    } while (!hasPossibleMoves(newGrid) && attempts < 1000)
+    return newGrid
+}
+
