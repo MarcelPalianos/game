@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 
+// --- Game State Definition ---
 sealed class GameState {
     object WaitingForMove : GameState()
     object Flashing : GameState()
@@ -21,6 +22,10 @@ sealed class GameState {
     object CheckingNewMatches : GameState()
     object Reshuffle : GameState()
 }
+
+// --- Data Model ---
+data class Tile(val color: Color)
+typealias Grid = List<MutableList<Tile>>
 
 @Composable
 fun Match3Game() {
@@ -32,11 +37,14 @@ fun Match3Game() {
     val paddingPx = with(density) { paddingDp.toPx() }
     val totalTileSize = tileSizePx + paddingPx
 
+    // Additional state for falling animation offsets (in pixels)
+    var fallingOffsets by remember { mutableStateOf<Map<Pair<Int, Int>, Float>>(emptyMap()) }
+
     var gameState by remember { mutableStateOf<GameState>(GameState.WaitingForMove) }
     var grid by remember { mutableStateOf(generateRandomGrid(gridSize)) }
     var draggedTile by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
-    var flashingTiles by remember { mutableStateOf<Set<Pair<Int, Int>>>(emptySet()) } // ⚡ Holds flashing tiles
+    var flashingTiles by remember { mutableStateOf<Set<Pair<Int, Int>>>(emptySet()) }
 
     Box(
         modifier = Modifier
@@ -56,7 +64,6 @@ fun Match3Game() {
                             draggedTile?.let { (row, col) ->
                                 val direction = getSwipeDirection(dragOffset.x, dragOffset.y)
                                 val targetPos = getNewPosition(row, col, direction)
-
                                 if (targetPos != null && isValidSwap(grid, row, col, targetPos)) {
                                     grid = swapTiles(grid, Pair(row, col), targetPos)
                                     gameState = GameState.Flashing
@@ -84,16 +91,20 @@ fun Match3Game() {
                     val isFlashing = flashingTiles.contains(Pair(row, col))
                     val tileColor = if (isFlashing) Color.White else grid[row][col].color
 
+                    // If this tile is falling, add its falling offset (default to 0 if not falling)
+                    val extraYOffset = fallingOffsets[Pair(row, col)] ?: 0f
+
                     if (draggedTile != Pair(row, col)) {
                         drawRect(
                             color = tileColor,
-                            topLeft = Offset(startX + col * totalTileSize, startY + row * totalTileSize),
+                            topLeft = Offset(startX + col * totalTileSize, startY + row * totalTileSize + extraYOffset),
                             size = androidx.compose.ui.geometry.Size(tileSizePx, tileSizePx)
                         )
                     }
                 }
             }
             draggedTile?.let { (row, col) ->
+                // For the dragged tile, we apply dragOffset (no falling animation)
                 drawRect(
                     color = grid[row][col].color,
                     topLeft = Offset(
@@ -111,21 +122,28 @@ fun Match3Game() {
         processGameLogic(
             currentGrid = grid,
             currentGameState = gameState,
+            totalTileSize = totalTileSize,
             updateGameState = { newGameState -> gameState = newGameState },
             updateGrid = { newGrid -> grid = newGrid },
-            updateFlashingTiles = { flashingTiles = it } // ✅ Update flashing tiles
+            updateFlashingTiles = { flashingTiles = it },
+            updateFallingOffsets = { fallingOffsets = it }  // New updater for falling offsets
         )
     }
 }
+
+// Modified processGameLogic to animate falling tiles during FallingTiles state.
 suspend fun processGameLogic(
     currentGrid: Grid,
     currentGameState: GameState,
     updateGameState: (GameState) -> Unit,
+    totalTileSize: Float,
     updateGrid: (Grid) -> Unit,
-    updateFlashingTiles: (Set<Pair<Int, Int>>) -> Unit
+    updateFlashingTiles: (Set<Pair<Int, Int>>) -> Unit,
+    updateFallingOffsets: (Map<Pair<Int, Int>, Float>) -> Unit
 ) {
     var grid = currentGrid
     var gameState = currentGameState
+
 
     while (true) {
         delay(200) // Short delay for animations
@@ -134,7 +152,7 @@ suspend fun processGameLogic(
             is GameState.Flashing -> {
                 val matches = findMatches(grid)
                 if (matches.isNotEmpty()) {
-                    for (i in 1..3) {
+                    repeat(3) {
                         updateFlashingTiles(matches.toSet()) // Show flashing
                         delay(300)
                         updateFlashingTiles(emptySet()) // Hide flashing
@@ -148,11 +166,16 @@ suspend fun processGameLogic(
                 gameState = GameState.FallingTiles
             }
             is GameState.FallingTiles -> {
-                grid = applyGravity(grid)
+                // Animate falling before updating grid
+                val oldGrid = grid
+                val newGrid = applyGravity(grid)
+                // Compute falling distances (in pixels) for tiles that moved.
+                val fallingMap = computeFallingOffsets(oldGrid, totalTileSize)
+                animateFallingTiles(fallingMap) { updateFallingOffsets(it) }
+                grid = newGrid
                 gameState = GameState.CheckingNewMatches
             }
             is GameState.CheckingNewMatches -> {
-                // First check if there are any valid moves available.
                 if (!hasPossibleMoves(grid)) {
                     gameState = GameState.Reshuffle
                 } else {
@@ -161,20 +184,66 @@ suspend fun processGameLogic(
                 }
             }
             is GameState.Reshuffle -> {
-                // Reshuffle until a grid with valid moves is obtained.
                 grid = reshuffleGrid(grid)
                 gameState = GameState.CheckingNewMatches
             }
-            else -> return // Exit loop if no action needed
+            else -> return
         }
 
-        // Apply updates to UI state
         updateGameState(gameState)
         updateGrid(grid)
     }
 }
 
-/** ✅ Implements gravity so tiles fall into empty spaces */
+/** Helper: Compute falling offsets (in pixels) for each tile that moved.
+This iterates column by column (bottom-up) and for any non-transparent tile that has empty spaces below,
+it maps its new grid position to the fall distance (emptySpaces * totalTileSize). */
+fun computeFallingOffsets(oldGrid: Grid, totalTileSize: Float): Map<Pair<Int, Int>, Float> {
+    val offsets = mutableMapOf<Pair<Int, Int>, Float>()
+    val size = oldGrid.size
+    for (col in 0 until size) {
+        var emptyCount = 0
+        // Process column from bottom-up
+        for (row in (size - 1) downTo 0) {
+            if (oldGrid[row][col].color == Color.Transparent) {
+                emptyCount++
+            } else if (emptyCount > 0) {
+                // For a tile that existed in oldGrid, record its fall distance.
+                offsets[Pair(row + emptyCount, col)] = emptyCount * totalTileSize
+            }
+        }
+        // If the top rows were cleared, assign a default falling offset for new tiles.
+        for (row in 0 until emptyCount) {
+            // Only assign if no offset is already set (i.e. for cells that are entirely new)
+            if (offsets[Pair(row, col)] == null) {
+                offsets[Pair(row, col)] = totalTileSize // you could adjust this value as desired
+            }
+        }
+    }
+    return offsets
+}
+
+
+/** Helper: Animate falling offsets over a fixed duration.
+Calls the update callback repeatedly with the current fraction of the total fall distance. */
+suspend fun animateFallingTiles(
+    fallingMap: Map<Pair<Int, Int>, Float>,
+    update: (Map<Pair<Int, Int>, Float>) -> Unit
+) {
+    val duration = 300L // Total animation duration in milliseconds
+    val steps = 20     // Number of steps for the animation
+    for (step in 1..steps) {
+        val fraction = step / steps.toFloat()
+        val newOffsets = fallingMap.mapValues { (_, totalOffset) -> totalOffset * fraction }
+        update(newOffsets)
+        delay(duration / steps)
+    }
+    update(emptyMap())
+}
+
+/** Below are your other helper functions (applyGravity, removeMatches, findMatches, etc.)
+They remain mostly unchanged. */
+
 fun applyGravity(grid: Grid): Grid {
     val newGrid = grid.map { it.toMutableList() }
 
@@ -201,26 +270,21 @@ fun applyGravity(grid: Grid): Grid {
     return newGrid
 }
 
-/** ✅ Removes matched tiles */
 fun removeMatches(grid: Grid): Grid {
     val newGrid = grid.map { it.toMutableList() }
     val matches = findMatches(newGrid)
     matches.forEach { (row, col) -> newGrid[row][col] = Tile(Color.Transparent) }
     return newGrid
 }
-/** ✅ Only swap if it creates a match */
+
 fun isValidSwap(grid: Grid, row: Int, col: Int, target: Pair<Int, Int>): Boolean {
     val tempGrid = swapTiles(grid.map { it.toMutableList() }, Pair(row, col), target)
-
     return findMatches(tempGrid).isNotEmpty()
 }
 
-/** 🔍 Find all matches (3+ adjacent tiles of the same color) */
 fun findMatches(grid: Grid): List<Pair<Int, Int>> {
     val matchedTiles = mutableSetOf<Pair<Int, Int>>()
     val gridSize = grid.size
-
-    // Check rows
     for (row in 0 until gridSize) {
         for (col in 0 until gridSize - 2) {
             if (grid[row][col].color == grid[row][col + 1].color &&
@@ -232,8 +296,6 @@ fun findMatches(grid: Grid): List<Pair<Int, Int>> {
             }
         }
     }
-
-    // Check columns
     for (col in 0 until gridSize) {
         for (row in 0 until gridSize - 2) {
             if (grid[row][col].color == grid[row + 1][col].color &&
@@ -245,24 +307,16 @@ fun findMatches(grid: Grid): List<Pair<Int, Int>> {
             }
         }
     }
-
     return matchedTiles.toList()
 }
-
-data class Tile(val color: Color)
-
-typealias Grid = List<MutableList<Tile>>
 
 fun generateRandomGrid(size: Int): Grid {
     val colors = listOf(Color.Red, Color.Green, Color.Blue, Color.Yellow)
     val grid = MutableList(size) { MutableList(size) { Tile(colors.random()) } }
-
     var attempt = 0
-    val maxAttempts = 500 // Prevent infinite loops
-
+    val maxAttempts = 500
     do {
         attempt++
-        // Fill the grid with random tiles, ensuring no initial matches
         for (row in 0 until size) {
             for (col in 0 until size) {
                 do {
@@ -271,28 +325,15 @@ fun generateRandomGrid(size: Int): Grid {
                 } while (createsMatch(grid, row, col))
             }
         }
-
-        // Stop if we found a valid move or reached max attempts
-        if (hasPossibleMoves(grid) || attempt >= maxAttempts) {
-            break
-        }
-
+        if (hasPossibleMoves(grid) || attempt >= maxAttempts) break
     } while (true)
-
     return grid
 }
 
-
-/** 🔍 Prevents immediate matches at grid generation */
 fun createsMatch(grid: Grid, row: Int, col: Int): Boolean {
     val color = grid[row][col].color
-
-    // Check left & right
     if (col >= 2 && grid[row][col - 1].color == color && grid[row][col - 2].color == color) return true
-
-    // Check above & below
     if (row >= 2 && grid[row - 1][col].color == color && grid[row - 2][col].color == color) return true
-
     return false
 }
 
@@ -323,38 +364,34 @@ fun getNewPosition(row: Int, col: Int, direction: String?): Pair<Int, Int>? {
         else -> null
     }
 }
+
 fun generateRandomColor(): Color {
     val colors = listOf(Color.Red, Color.Green, Color.Blue, Color.Yellow, Color.Cyan, Color.Magenta)
     return colors.random()
 }
+
 fun hasPossibleMoves(grid: Grid): Boolean {
     val size = grid.size
-
     for (row in 0 until size) {
         for (col in 0 until size) {
-            // Try swapping with right neighbor
             if (col < size - 1) {
                 val swappedRight = swapTiles(grid, Pair(row, col), Pair(row, col + 1))
                 if (findMatches(swappedRight).isNotEmpty()) return true
             }
-
-            // Try swapping with bottom neighbor
             if (row < size - 1) {
                 val swappedDown = swapTiles(grid, Pair(row, col), Pair(row + 1, col))
                 if (findMatches(swappedDown).isNotEmpty()) return true
             }
         }
     }
-    return false // No valid moves found
+    return false
 }
+
 fun reshuffleGrid(grid: Grid): Grid {
     val size = grid.size
-    // Flatten the grid into a mutable list of tiles
     val allTiles = grid.flatten().toMutableList()
     var newGrid: Grid
     var attempts = 0
-    // Keep shuffling until a configuration with at least one possible move is found,
-    // or until a maximum number of attempts is reached.
     do {
         attempts++
         allTiles.shuffle()
@@ -366,4 +403,3 @@ fun reshuffleGrid(grid: Grid): Grid {
     } while (!hasPossibleMoves(newGrid) && attempts < 1000)
     return newGrid
 }
-
